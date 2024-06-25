@@ -16,17 +16,25 @@ from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 import os
 from dotenv import load_dotenv
+from datasets import Dataset
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy, context_recall, context_precision
+from uuid import uuid4
 
 load_dotenv()
 
-langfuse = Langfuse()
+langfuse = Langfuse(
+    secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+    public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+    host=os.environ["LANGFUSE_HOST"],
+)
 
 if "langfuse_handler" not in st.session_state:
     st.session_state["langfuse_handler"] = CallbackHandler(
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
         public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        host="https://us.cloud.langfuse.com",
-        session_id="session_id",
+        host=os.environ["LANGFUSE_HOST"],
+        session_id=str(uuid4()),
     )
 langfuse_handler = st.session_state["langfuse_handler"]
 
@@ -64,3 +72,23 @@ if prompt:
         config={"callbacks": [langfuse_handler]},
     )
     st.write(response["answer"]["text"])
+
+    contexts = [f"Page Content: {x.page_content[:1024]}, Source: {x.metadata["source"]}" for x in response["context"]]
+
+    evaluation_data = {
+        "question": [prompt],
+        "contexts": [contexts],
+        "answer": [response["answer"]["text"]],
+    }
+    dataset = Dataset.from_dict(evaluation_data)
+    result = evaluate(
+        dataset,
+        metrics=[faithfulness, answer_relevancy]
+    )
+    st.write(result)
+    for metric_name, value in result.items():
+        langfuse.score(
+            name=metric_name,
+            value=value,
+            trace_id=langfuse_handler.get_trace_id(),
+        )
